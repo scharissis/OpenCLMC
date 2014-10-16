@@ -1,6 +1,10 @@
-#include "gl_core_4_4.h"
 
+#define _CRT_SECURE_NO_WARNINGS
+
+#include "gl_core_4_4.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <GLFW/glfw3.h>
 #include <CL/opencl.h>
 
@@ -10,17 +14,38 @@ void APIENTRY debugCallback(GLenum source, GLenum type, GLuint id,
 	GLenum severity, GLsizei length, const GLchar * msg, const void * param);
 
 #define CL_CHECK(result) if (result != CL_SUCCESS) { printf("Error: %i\n", result); }
+#define STRINGIFY(str) #str
 
 int main(int argc, char* argv[])
 {
+	// mc
+	size_t			gridSize[3];
+	cl_float		threshold;
+	unsigned int	maxVertices;
+	unsigned int	vertexCount;
+
+	// gl objects
+	GLuint	shaderProgram;
+	GLuint	vao, vbo;
+
+	// cl objects
+	cl_context			context;
+	cl_command_queue	queue;
+	cl_program			program;
+	cl_kernel			kernel;
+
+	cl_mem				vboLink;
+	cl_mem				particleBuffer;
+	cl_mem				vertexCountLink;
+
 	// open GL window
 	if (!glfwInit())
 		exit(EXIT_FAILURE);
-	/*
+	
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 4);
 	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);*/
+	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
 	GLFWwindow* window = glfwCreateWindow(1280, 720, "OpenCL Marching Cubes", nullptr, nullptr);
@@ -43,27 +68,26 @@ int main(int argc, char* argv[])
 	glEnable(GL_DEPTH_TEST);
 	glDebugMessageCallback(debugCallback, nullptr);
 	glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
+	
+	char* vsSource = STRINGIFY(#version 330\n layout(location = 0) in vec4 Position; layout(location = 1)in vec4 Normal; out vec4 N; uniform mat4 pvm; void main() { gl_Position = pvm * Position; N = Normal; });
+	char* fsSource = STRINGIFY(#version 330\n in vec4 N; out vec4 Colour; void main() { float d = dot(normalize(N.xyz), normalize(vec3(0, 1, 1))) * 0.8; Colour = vec4(d, 0, d, 1); });
 
-	// mc
-	size_t			m_gridSize[3];
-	cl_float		m_threshold;
-	unsigned int	m_maxVertices;
-	unsigned int	m_vertexCount;
+	GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+	GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
 
-	// gl objects
-//	ShaderProgram	m_shader;
-	unsigned int	m_vao, m_vbo;
+	glShaderSource(vs, 1, &vsSource, 0);
+	glShaderSource(fs, 1, &fsSource, 0);
 
-	// cl objects
-	cl_context			m_context;
-	cl_command_queue	m_queue;
-	cl_program			m_program;
-	cl_kernel			m_kernel;
+	glCompileShader(vs);
+	glCompileShader(fs);
 
-	cl_mem				m_vboLink;
-	cl_mem				m_particleBuffer;
-	cl_mem				m_vertexCountLink;
+	shaderProgram = glCreateProgram();
+	glAttachShader(shaderProgram, vs);
+	glAttachShader(shaderProgram, fs);
+	glLinkProgram(shaderProgram);
+	glUseProgram(shaderProgram);
 
+	GLint pvmUniform = glGetUniformLocation(shaderProgram, "pvm");
 
 	// OpenCL Setup
 	cl_platform_id platform;
@@ -80,9 +104,9 @@ int main(int argc, char* argv[])
 		CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
 		0, 0,
 	};
-	m_context = clCreateContext(contextProperties, 1, &device, 0, 0, &result);
+	context = clCreateContext(contextProperties, 1, &device, 0, 0, &result);
 	CL_CHECK(result);
-	m_queue = clCreateCommandQueue(m_context, device, 0, &result);
+	queue = clCreateCommandQueue(context, device, 0, &result);
 	CL_CHECK(result);
 
 	// load kernel code
@@ -95,125 +119,119 @@ int main(int argc, char* argv[])
 	fclose(file);
 
 	// build program and extract kernel
-	m_program = clCreateProgramWithSource(m_context, 1, (const char**)&kernelSource, (const size_t*)&size, &result);
+	program = clCreateProgramWithSource(context, 1, (const char**)&kernelSource, (const size_t*)&size, &result);
 	CL_CHECK(result);
-	result = clBuildProgram(m_program, 1, &device, 0, 0, 0);
+	result = clBuildProgram(program, 1, &device, 0, 0, 0);
 	if (result != CL_SUCCESS)
 	{
 		size_t len = 0;
-		clGetProgramBuildInfo(m_program, device, CL_PROGRAM_BUILD_LOG, 0, 0, &len);
+		clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, 0, &len);
 		char* log = new char[len];
-		clGetProgramBuildInfo(m_program, device, CL_PROGRAM_BUILD_LOG, len, log, 0);
+		clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, len, log, 0);
 		OutputDebugStringA("Kernel error:\n");
 		OutputDebugStringA(log);
 		OutputDebugStringA("\n");
 	}
 	CL_CHECK(result);
-	m_kernel = clCreateKernel(m_program, "kernelMC", &result);
+	kernel = clCreateKernel(program, "kernelMC", &result);
 	CL_CHECK(result);
 
-
 	// MC data
-	m_gridSize[0] = 256;
-	m_gridSize[1] = 256;
-	m_gridSize[2] = 256;
-
-//	m_box = PrimitiveGenerator::createBox(m_gridSize[0], m_gridSize[1], m_gridSize[2]);
-
-	m_threshold = 0.0015f;//50*50;
-
-	m_vertexCount = 0;
-	m_maxVertices = 3 * 250000;
+	gridSize[0] = 256;
+	gridSize[1] = 256;
+	gridSize[2] = 256;
+	threshold = 0.0015f;
+	vertexCount = 0;
+	maxVertices = 3 * 250000;
 
 	// gl data
-	glGenVertexArrays(1, &m_vao);
-	glGenBuffers(1, &m_vbo);
-	glBindVertexArray(m_vao);
-	glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * m_maxVertices * 2, 0, GL_STATIC_DRAW);
+	glGenVertexArrays(1, &vao);
+	glBindVertexArray(vao);
 	glEnableVertexAttribArray(0);
 	glEnableVertexAttribArray(1);
+
+	glGenBuffers(1, &vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * maxVertices * 2, 0, GL_STATIC_DRAW);
+
 	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(glm::vec4) * 2, 0);
 	glVertexAttribPointer(1, 4, GL_FLOAT, GL_TRUE, sizeof(glm::vec4) * 2, ((char*)0) + 16);
 	glBindVertexArray(0);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
 	// cl mem objects
-	m_vboLink = clCreateFromGLBuffer(m_context, CL_MEM_WRITE_ONLY, m_vbo, &result);
+	vboLink = clCreateFromGLBuffer(context, CL_MEM_WRITE_ONLY, vbo, &result);
 	CL_CHECK(result);
-	m_vertexCountLink = clCreateBuffer(m_context, CL_MEM_READ_WRITE, sizeof(unsigned int), &m_vertexCount, &result);
+	vertexCountLink = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(unsigned int), &vertexCount, &result);
 	CL_CHECK(result);
 
 	// loop
 	while (!glfwWindowShouldClose(window) && 
 		   !glfwGetKey(window, GLFW_KEY_ESCAPE)) 
 	{
-		// march cubes
-		
 		// ensure GL is complete
 		glFinish();
 
 		// reset CL and aquire mem objects
-		m_vertexCount = 0;
+		vertexCount = 0;
 		cl_event writeEvents[2] = { 0, 0 };
 
-		cl_int result = clEnqueueAcquireGLObjects(m_queue, 1, &m_vboLink, 0, 0, &writeEvents[0]);
+		cl_int result = clEnqueueAcquireGLObjects(queue, 1, &vboLink, 0, 0, &writeEvents[0]);
 		CL_CHECK(result);
-		result = clEnqueueWriteBuffer(m_queue, m_vertexCountLink, CL_FALSE, 0, sizeof(unsigned int), &m_vertexCount, 0, nullptr, &writeEvents[1]);
+		result = clEnqueueWriteBuffer(queue, vertexCountLink, CL_FALSE, 0, sizeof(unsigned int), &vertexCount, 0, nullptr, &writeEvents[1]);
 		CL_CHECK(result);
 
-		result = clSetKernelArg(m_kernel, 0, sizeof(cl_mem), &m_vertexCountLink);
-		result |= clSetKernelArg(m_kernel, 1, sizeof(cl_mem), &m_vboLink);
-		result |= clSetKernelArg(m_kernel, 2, sizeof(cl_float), &m_threshold);
+		result = clSetKernelArg(kernel, 0, sizeof(cl_mem), &vertexCountLink);
+		result |= clSetKernelArg(kernel, 1, sizeof(cl_mem), &vboLink);
+		result |= clSetKernelArg(kernel, 2, sizeof(cl_float), &threshold);
 		CL_CHECK(result);
 
 		cl_event processEvent = 0;
-		result = clEnqueueNDRangeKernel(m_queue, m_kernel, 3, 0, m_gridSize, 0, 2, writeEvents, &processEvent);
+		result = clEnqueueNDRangeKernel(queue, kernel, 3, 0, gridSize, 0, 2, writeEvents, &processEvent);
 		CL_CHECK(result);
 
-		result = clEnqueueReleaseGLObjects(m_queue, 1, &m_vboLink, 1, &processEvent, 0);
+		result = clEnqueueReleaseGLObjects(queue, 1, &vboLink, 1, &processEvent, 0);
 		CL_CHECK(result);
 
-		result = clEnqueueReadBuffer(m_queue, m_vertexCountLink, CL_FALSE, 0, sizeof(unsigned int), &m_vertexCount, 1, &processEvent, 0);
+		result = clEnqueueReadBuffer(queue, vertexCountLink, CL_FALSE, 0, sizeof(unsigned int), &vertexCount, 1, &processEvent, 0);
 		CL_CHECK(result);
 
-		clFinish(m_queue);
+		clFinish(queue);
 
+		// draw blob
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-		/*
-		// bind shader
-	//	m_shader.bind();
 
-		float a_currentTime = 0;
+		float time = (float)glfwGetTime();
 
 		glm::vec3 target(128, 128, 128);
-		glm::vec3 eye(sin(a_currentTime / 1000.f) * 128, 25, cos(a_currentTime / 1000.f) * 128);
-
+		glm::vec3 eye(sin(time) * 128, 25, cos(time) * 128);
 		glm::mat4 pvm = glm::perspective(glm::radians(90.0f), 16 / 9.f, 0.1f, 2000.f) * glm::lookAt(target + eye, target, glm::vec3(0, 1, 0));
-		glm::mat4 offset = glm::translate(target);
 
-		glUniformMatrix4fv(m_shader.getUniform("pvm"), 1, GL_FALSE, glm::value_ptr(pvm * offset));
+		glUniformMatrix4fv(pvmUniform, 1, GL_FALSE, glm::value_ptr(pvm));
 
-	//	m_box->draw();
-
-		glUniformMatrix4fv(m_shader.getUniform("pvm"), 1, GL_FALSE, glm::value_ptr(pvm));
-
-		glBindVertexArray(m_vao);
-		glDrawArrays(GL_TRIANGLES, 0, min(m_vertexCount / 2, m_maxVertices));
-		*/
+		glBindVertexArray(vao);
+		glDrawArrays(GL_TRIANGLES, 0, glm::min(vertexCount / 2, maxVertices));
+		
 		// present
 		glfwSwapBuffers(window);
 		glfwPollEvents();
 	}
 
-	clFinish(m_queue);
-	clReleaseMemObject(m_vboLink);
-	clReleaseMemObject(m_vertexCountLink);
-	clReleaseKernel(m_kernel);
-	clReleaseProgram(m_program);
-	clReleaseCommandQueue(m_queue);
-	clReleaseContext(m_context);
+	// cleanup cl
+	clFinish(queue);
+	clReleaseMemObject(vboLink);
+	clReleaseMemObject(vertexCountLink);
+	clReleaseKernel(kernel);
+	clReleaseProgram(program);
+	clReleaseCommandQueue(queue);
+	clReleaseContext(context);
 
+	// cleanup gl
+	glDeleteBuffers(1, &vbo);
+	glDeleteVertexArrays(1, &vao);
+	glDeleteShader(vs);
+	glDeleteShader(fs);
+	glDeleteProgram(shaderProgram);
 	glfwTerminate();
 
 	exit(EXIT_SUCCESS);
@@ -301,5 +319,5 @@ void APIENTRY debugCallback(GLenum source, GLenum type, GLuint id,
 		sevStr = "UNK";
 	}
 
-	printf("ERROR: %s:%s[%s](%d):\n\t%s\n", sourceStr.c_str(), typeStr.c_str(), sevStr.c_str(), id, msg);
+	printf("%s:%s[%s](%d):\n\t%s\n", sourceStr.c_str(), typeStr.c_str(), sevStr.c_str(), id, msg);
 }

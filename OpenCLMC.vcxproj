@@ -18,7 +18,9 @@
     <ClInclude Include="gl_core_4_4.h" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="LICENSE" />
     <None Include="mc.cl" />
+    <None Include="README.md" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{6177DAFD-112C-486A-8E1C-52DF29AB287F}</ProjectGuid>
