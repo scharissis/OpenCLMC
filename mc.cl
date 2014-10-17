@@ -375,7 +375,7 @@ kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into v
 			break;
 
 		// using an atomic to index into the write_only array of vertices
-		uint startVertex = atomic_add(a_faceCount,1);
+		uint startVertex = atomic_inc(a_faceCount);
 
 		for ( int triangleVertex = 0 ; triangleVertex < 3 ; ++triangleVertex )
 		{
