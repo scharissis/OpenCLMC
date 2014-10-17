@@ -300,28 +300,14 @@ constant int TRIANGLE_TABLE[256][16] =
 	{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1}
 };
 
-// Silly example volume
+// example volume, could be changed in the future to sample voxels
 float sampleVolume(float3 v)
 {
 	float3 vp = v - (float3)(128,128,128);
-	float d = 1.0 / dot(vp, vp);	
-
-	vp = v - (float3)(128,128 + 64,128);
-	d += 1.0 / dot(vp, vp);
-
-	vp = v - (float3)(128,128 - 64,128);
-	d += 1.0 / dot(vp, vp);
-	
-	vp = v - (float3)(128 - 64,128 - 64,128-16);
-	d += 1.0 / dot(vp, vp);
-	
-	vp = v - (float3)(128-16,128 - 64,128-64);
-	d += 1.0 / dot(vp, vp);
-
-	return d;
+	return 1.0 / dot(vp, vp);	
 }
 
-kernel void kernelMC(write_only global uint* a_vertexCount, // atomic index into vertices
+kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into vertices
 					 write_only global float4* a_vertices,
 					 float a_threshold)
 {
@@ -367,7 +353,7 @@ kernel void kernelMC(write_only global uint* a_vertexCount, // atomic index into
 				offset = (a_threshold - cornerVolumes[ EDGE_INDICES[ edgeIndex ][0] ]) / delta;
 
 			edgePosition[ edgeIndex ] = cubeCorner + (CUBE_CORNERS[ EDGE_INDICES[ edgeIndex ][0] ] + EDGE_DIRECTIONS[ edgeIndex ] * offset);
-
+			
 			// calculate normal
 			edgeNormal[ edgeIndex ].x = sampleVolume(edgePosition[ edgeIndex ] - (float3)(0.01f,0,0)) - 
 										sampleVolume(edgePosition[ edgeIndex ] + (float3)(0.01f,0,0));
@@ -389,13 +375,14 @@ kernel void kernelMC(write_only global uint* a_vertexCount, // atomic index into
 			break;
 
 		// using an atomic to index into the write_only array of vertices
-		uint startVertex = atomic_add(a_vertexCount,6);
+		uint startVertex = atomic_add(a_faceCount,1);
 
 		for ( int triangleVertex = 0 ; triangleVertex < 3 ; ++triangleVertex )
 		{
+			// write out 2 float4's for each vertex (position + normal)
 			int vertexIndex = TRIANGLE_TABLE[ flagIndex ][3 * triangleIndex + triangleVertex];
-			a_vertices[startVertex + triangleVertex * 2] = (float4)(edgePosition[ vertexIndex ], 1.0f);
-			a_vertices[startVertex + 1 + triangleVertex * 2] = (float4)(edgeNormal[ vertexIndex ], 0.0f);
+			a_vertices[startVertex * 6 + triangleVertex * 2] = (float4)(edgePosition[ vertexIndex ], 1.0f);
+			a_vertices[startVertex * 6 + triangleVertex * 2 + 1] = (float4)(edgeNormal[ vertexIndex ], 0.0f);
 		}
 	}	
 }

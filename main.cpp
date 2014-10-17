@@ -16,29 +16,40 @@ void APIENTRY debugCallback(GLenum source, GLenum type, GLuint id,
 #define CL_CHECK(result) if (result != CL_SUCCESS) { printf("Error: %i\n", result); }
 #define STRINGIFY(str) #str
 
-int main(int argc, char* argv[])
+struct GLData
 {
-	// mc
+	GLuint	program;
+	GLuint	vao;
+	GLuint	vbo;
+};
+
+struct MCData
+{
 	size_t			gridSize[3];
 	cl_float		threshold;
-	unsigned int	maxVertices;
-	unsigned int	vertexCount;
+	unsigned int	maxFaces;
+	unsigned int	faceCount;
+};
 
-	// gl objects
-	GLuint	shaderProgram;
-	GLuint	vao, vbo;
-
-	// cl objects
+struct CLData
+{
 	cl_context			context;
 	cl_command_queue	queue;
 	cl_program			program;
 	cl_kernel			kernel;
 
 	cl_mem				vboLink;
-	cl_mem				particleBuffer;
-	cl_mem				vertexCountLink;
+	cl_mem				faceCountLink;
+};
 
-	// open GL window
+int main(int argc, char* argv[])
+{
+	MCData mcData = { { 256, 256, 256 }, 0.0015f, 250000, 0 };
+	GLData glData = { 0 };
+	CLData clData;
+
+	//////////////////////////////////////////////////////////////////////////
+	// Window creation and OpenGL initialisaion
 	if (!glfwInit())
 		exit(EXIT_FAILURE);
 	
@@ -63,14 +74,16 @@ int main(int argc, char* argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	// setup
+	//////////////////////////////////////////////////////////////////////////
+	// OpenGL setup
 	glClearColor(0, 0, 0, 1);
 	glEnable(GL_DEPTH_TEST);
 	glDebugMessageCallback(debugCallback, nullptr);
 	glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
 	
+	// shader
 	char* vsSource = STRINGIFY(#version 330\n layout(location = 0) in vec4 Position; layout(location = 1)in vec4 Normal; out vec4 N; uniform mat4 pvm; void main() { gl_Position = pvm * Position; N = Normal; });
-	char* fsSource = STRINGIFY(#version 330\n in vec4 N; out vec4 Colour; void main() { float d = dot(normalize(N.xyz), normalize(vec3(0, 1, 1))) * 0.8; Colour = vec4(d, 0, d, 1); });
+	char* fsSource = STRINGIFY(#version 330\n in vec4 N; out vec4 Colour; void main() { float d = dot(normalize(N.xyz), normalize(vec3(0, 1, 1))) * 0.8; Colour = vec4(mix(vec3(0.25),vec3(1),d),1); });
 
 	GLuint vs = glCreateShader(GL_VERTEX_SHADER);
 	GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
@@ -81,15 +94,33 @@ int main(int argc, char* argv[])
 	glCompileShader(vs);
 	glCompileShader(fs);
 
-	shaderProgram = glCreateProgram();
-	glAttachShader(shaderProgram, vs);
-	glAttachShader(shaderProgram, fs);
-	glLinkProgram(shaderProgram);
-	glUseProgram(shaderProgram);
+	glData.program = glCreateProgram();
+	glAttachShader(glData.program, vs);
+	glAttachShader(glData.program, fs);
+	glLinkProgram(glData.program);
+	glUseProgram(glData.program);
+	glDeleteShader(vs);
+	glDeleteShader(fs);
 
-	GLint pvmUniform = glGetUniformLocation(shaderProgram, "pvm");
+	GLint pvmUniform = glGetUniformLocation(glData.program, "pvm");
 
-	// OpenCL Setup
+	// mesh data
+	glGenVertexArrays(1, &glData.vao);
+	glBindVertexArray(glData.vao);
+	glEnableVertexAttribArray(0);
+	glEnableVertexAttribArray(1);
+	
+	glGenBuffers(1, &glData.vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, glData.vbo);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * 2 * mcData.maxFaces * 3, 0, GL_STATIC_DRAW);
+
+	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(glm::vec4) * 2, 0);
+	glVertexAttribPointer(1, 4, GL_FLOAT, GL_TRUE, sizeof(glm::vec4) * 2, ((char*)0) + 16);
+	glBindVertexArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	//////////////////////////////////////////////////////////////////////////
+	// OpenCL stup
 	cl_platform_id platform;
 	cl_int result = clGetPlatformIDs(1, &platform, 0);
 	CL_CHECK(result);
@@ -104,9 +135,9 @@ int main(int argc, char* argv[])
 		CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
 		0, 0,
 	};
-	context = clCreateContext(contextProperties, 1, &device, 0, 0, &result);
+	clData.context = clCreateContext(contextProperties, 1, &device, 0, 0, &result);
 	CL_CHECK(result);
-	queue = clCreateCommandQueue(context, device, 0, &result);
+	clData.queue = clCreateCommandQueue(clData.context, device, 0, &result);
 	CL_CHECK(result);
 
 	// load kernel code
@@ -119,50 +150,28 @@ int main(int argc, char* argv[])
 	fclose(file);
 
 	// build program and extract kernel
-	program = clCreateProgramWithSource(context, 1, (const char**)&kernelSource, (const size_t*)&size, &result);
+	clData.program = clCreateProgramWithSource(clData.context, 1, (const char**)&kernelSource, (const size_t*)&size, &result);
+	delete[] kernelSource;
 	CL_CHECK(result);
-	result = clBuildProgram(program, 1, &device, 0, 0, 0);
+	result = clBuildProgram(clData.program, 1, &device, 0, 0, 0);
 	if (result != CL_SUCCESS)
 	{
 		size_t len = 0;
-		clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, 0, &len);
+		clGetProgramBuildInfo(clData.program, device, CL_PROGRAM_BUILD_LOG, 0, 0, &len);
 		char* log = new char[len];
-		clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, len, log, 0);
+		clGetProgramBuildInfo(clData.program, device, CL_PROGRAM_BUILD_LOG, len, log, 0);
 		OutputDebugStringA("Kernel error:\n");
 		OutputDebugStringA(log);
 		OutputDebugStringA("\n");
 	}
 	CL_CHECK(result);
-	kernel = clCreateKernel(program, "kernelMC", &result);
+	clData.kernel = clCreateKernel(clData.program, "kernelMC", &result);
 	CL_CHECK(result);
-
-	// MC data
-	gridSize[0] = 256;
-	gridSize[1] = 256;
-	gridSize[2] = 256;
-	threshold = 0.0015f;
-	vertexCount = 0;
-	maxVertices = 3 * 250000;
-
-	// gl data
-	glGenVertexArrays(1, &vao);
-	glBindVertexArray(vao);
-	glEnableVertexAttribArray(0);
-	glEnableVertexAttribArray(1);
-
-	glGenBuffers(1, &vbo);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * maxVertices * 2, 0, GL_STATIC_DRAW);
-
-	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(glm::vec4) * 2, 0);
-	glVertexAttribPointer(1, 4, GL_FLOAT, GL_TRUE, sizeof(glm::vec4) * 2, ((char*)0) + 16);
-	glBindVertexArray(0);
-	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
 	// cl mem objects
-	vboLink = clCreateFromGLBuffer(context, CL_MEM_WRITE_ONLY, vbo, &result);
+	clData.vboLink = clCreateFromGLBuffer(clData.context, CL_MEM_WRITE_ONLY, glData.vbo, &result);
 	CL_CHECK(result);
-	vertexCountLink = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(unsigned int), &vertexCount, &result);
+	clData.faceCountLink = clCreateBuffer(clData.context, CL_MEM_READ_WRITE, sizeof(unsigned int), &mcData.faceCount, &result);
 	CL_CHECK(result);
 
 	// loop
@@ -173,30 +182,30 @@ int main(int argc, char* argv[])
 		glFinish();
 
 		// reset CL and aquire mem objects
-		vertexCount = 0;
+		mcData.faceCount = 0;
 		cl_event writeEvents[2] = { 0, 0 };
 
-		cl_int result = clEnqueueAcquireGLObjects(queue, 1, &vboLink, 0, 0, &writeEvents[0]);
+		cl_int result = clEnqueueAcquireGLObjects(clData.queue, 1, &clData.vboLink, 0, 0, &writeEvents[0]);
 		CL_CHECK(result);
-		result = clEnqueueWriteBuffer(queue, vertexCountLink, CL_FALSE, 0, sizeof(unsigned int), &vertexCount, 0, nullptr, &writeEvents[1]);
+		result = clEnqueueWriteBuffer(clData.queue, clData.faceCountLink, CL_FALSE, 0, sizeof(unsigned int), &mcData.faceCount, 0, nullptr, &writeEvents[1]);
 		CL_CHECK(result);
 
-		result = clSetKernelArg(kernel, 0, sizeof(cl_mem), &vertexCountLink);
-		result |= clSetKernelArg(kernel, 1, sizeof(cl_mem), &vboLink);
-		result |= clSetKernelArg(kernel, 2, sizeof(cl_float), &threshold);
+		result = clSetKernelArg(clData.kernel, 0, sizeof(cl_mem), &clData.faceCountLink);
+		result |= clSetKernelArg(clData.kernel, 1, sizeof(cl_mem), &clData.vboLink);
+		result |= clSetKernelArg(clData.kernel, 2, sizeof(cl_float), &mcData.threshold);
 		CL_CHECK(result);
 
 		cl_event processEvent = 0;
-		result = clEnqueueNDRangeKernel(queue, kernel, 3, 0, gridSize, 0, 2, writeEvents, &processEvent);
+		result = clEnqueueNDRangeKernel(clData.queue, clData.kernel, 3, 0, mcData.gridSize, 0, 2, writeEvents, &processEvent);
 		CL_CHECK(result);
 
-		result = clEnqueueReleaseGLObjects(queue, 1, &vboLink, 1, &processEvent, 0);
+		result = clEnqueueReleaseGLObjects(clData.queue, 1, &clData.vboLink, 1, &processEvent, 0);
 		CL_CHECK(result);
 
-		result = clEnqueueReadBuffer(queue, vertexCountLink, CL_FALSE, 0, sizeof(unsigned int), &vertexCount, 1, &processEvent, 0);
+		result = clEnqueueReadBuffer(clData.queue, clData.faceCountLink, CL_FALSE, 0, sizeof(unsigned int), &mcData.faceCount, 1, &processEvent, 0);
 		CL_CHECK(result);
 
-		clFinish(queue);
+		clFinish(clData.queue);
 
 		// draw blob
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -204,13 +213,13 @@ int main(int argc, char* argv[])
 		float time = (float)glfwGetTime();
 
 		glm::vec3 target(128, 128, 128);
-		glm::vec3 eye(sin(time) * 128, 25, cos(time) * 128);
+		glm::vec3 eye(sin(time) * 32, 25, cos(time) * 32);
 		glm::mat4 pvm = glm::perspective(glm::radians(90.0f), 16 / 9.f, 0.1f, 2000.f) * glm::lookAt(target + eye, target, glm::vec3(0, 1, 0));
 
 		glUniformMatrix4fv(pvmUniform, 1, GL_FALSE, glm::value_ptr(pvm));
 
-		glBindVertexArray(vao);
-		glDrawArrays(GL_TRIANGLES, 0, glm::min(vertexCount / 2, maxVertices));
+		glBindVertexArray(glData.vao);
+		glDrawArrays(GL_TRIANGLES, 0, glm::min(mcData.faceCount, mcData.maxFaces) * 3);
 		
 		// present
 		glfwSwapBuffers(window);
@@ -218,20 +227,18 @@ int main(int argc, char* argv[])
 	}
 
 	// cleanup cl
-	clFinish(queue);
-	clReleaseMemObject(vboLink);
-	clReleaseMemObject(vertexCountLink);
-	clReleaseKernel(kernel);
-	clReleaseProgram(program);
-	clReleaseCommandQueue(queue);
-	clReleaseContext(context);
+	clFinish(clData.queue);
+	clReleaseMemObject(clData.vboLink);
+	clReleaseMemObject(clData.faceCountLink);
+	clReleaseKernel(clData.kernel);
+	clReleaseProgram(clData.program);
+	clReleaseCommandQueue(clData.queue);
+	clReleaseContext(clData.context);
 
 	// cleanup gl
-	glDeleteBuffers(1, &vbo);
-	glDeleteVertexArrays(1, &vao);
-	glDeleteShader(vs);
-	glDeleteShader(fs);
-	glDeleteProgram(shaderProgram);
+	glDeleteBuffers(1, &glData.vbo);
+	glDeleteVertexArrays(1, &glData.vao);
+	glDeleteProgram(glData.program);
 	glfwTerminate();
 
 	exit(EXIT_SUCCESS);
@@ -319,5 +326,5 @@ void APIENTRY debugCallback(GLenum source, GLenum type, GLuint id,
 		sevStr = "UNK";
 	}
 
-	printf("%s:%s[%s](%d):\n\t%s\n", sourceStr.c_str(), typeStr.c_str(), sevStr.c_str(), id, msg);
+	printf("%s: %s [%s] (%d):\n\t%s\n", typeStr.c_str(), sourceStr.c_str(), sevStr.c_str(), id, msg);
 }
