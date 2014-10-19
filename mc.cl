@@ -300,45 +300,41 @@ constant int TRIANGLE_TABLE[256][16] =
 	{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1}
 };
 
-// example volume, could be changed in the future to sample voxels
-float sampleVolume(float4 v)
+// example volume (metaballs for now)
+float sampleVolume(float4 v, 
+	int particleCount, read_only global float4* particles)
 {
-	float4 vp = v - (float4)(128,128,128,0);
-	float d = 1.0 / dot(vp.xyz, vp.xyz);
+	float4 vp;
+	float d = 0;
+	
+	for (int i = 0; i < particleCount; ++i)
+	{
+		vp = v - particles[i];
+		d += 1.0 / dot(vp.xyz, vp.xyz);
+	} 
 
-	vp = v - (float4)(128, 128 + 64, 128, 0);
-	d += 1.0 / dot(vp.xyz, vp.xyz);
-
-	vp = v - (float4)(128, 128 - 64, 128, 0);
-	d += 1.0 / dot(vp.xyz, vp.xyz);
-
-	vp = v - (float4)(128 - 64, 128 - 64, 128 - 16, 0);
-	d += 1.0 / dot(vp.xyz, vp.xyz);
-
-	vp = v - (float4)(128 - 16, 128 - 64, 128 - 64, 0);
-	d += 1.0 / dot(vp.xyz, vp.xyz);
-
-	// give them the d!
 	return d;
 }
 
 kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into vertices
 					 write_only global float4* a_vertices,
-					 float a_threshold)
+					 float a_threshold,
+					 int a_particleCount,
+					 read_only global float4* a_particles)
 {
 	// lower corner
 	float4 cubeCorner = (float4)(get_global_id(0), get_global_id(1), get_global_id(2), 0.0f);
 
 	// store a local copy of the cube's corner volumes
 	float cornerVolumes[8];	
-	cornerVolumes[ 0 ] = sampleVolume( cubeCorner + CUBE_CORNERS[ 0 ] );
-	cornerVolumes[ 1 ] = sampleVolume( cubeCorner + CUBE_CORNERS[ 1 ] );
-	cornerVolumes[ 2 ] = sampleVolume( cubeCorner + CUBE_CORNERS[ 2 ] );
-	cornerVolumes[ 3 ] = sampleVolume( cubeCorner + CUBE_CORNERS[ 3 ] );
-	cornerVolumes[ 4 ] = sampleVolume( cubeCorner + CUBE_CORNERS[ 4 ] );
-	cornerVolumes[ 5 ] = sampleVolume( cubeCorner + CUBE_CORNERS[ 5 ] );
-	cornerVolumes[ 6 ] = sampleVolume( cubeCorner + CUBE_CORNERS[ 6 ] );
-	cornerVolumes[ 7 ] = sampleVolume( cubeCorner + CUBE_CORNERS[ 7 ] );
+	cornerVolumes[0] = sampleVolume(cubeCorner + CUBE_CORNERS[0], a_particleCount, a_particles);
+	cornerVolumes[1] = sampleVolume(cubeCorner + CUBE_CORNERS[1], a_particleCount, a_particles);
+	cornerVolumes[2] = sampleVolume(cubeCorner + CUBE_CORNERS[2], a_particleCount, a_particles);
+	cornerVolumes[3] = sampleVolume(cubeCorner + CUBE_CORNERS[3], a_particleCount, a_particles);
+	cornerVolumes[4] = sampleVolume(cubeCorner + CUBE_CORNERS[4], a_particleCount, a_particles);
+	cornerVolumes[5] = sampleVolume(cubeCorner + CUBE_CORNERS[5], a_particleCount, a_particles);
+	cornerVolumes[6] = sampleVolume(cubeCorner + CUBE_CORNERS[6], a_particleCount, a_particles);
+	cornerVolumes[7] = sampleVolume(cubeCorner + CUBE_CORNERS[7], a_particleCount, a_particles);
 	
 	// find which corners are inside/outside the volume
 	int flagIndex = 0;	
@@ -370,12 +366,12 @@ kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into v
 			edgePosition[ edgeIndex ] = cubeCorner + (CUBE_CORNERS[ EDGE_INDICES[ edgeIndex ][0] ] + EDGE_DIRECTIONS[ edgeIndex ] * offset);
 
 			// calculate normal
-			edgeNormal[ edgeIndex ].x = sampleVolume(edgePosition[ edgeIndex ] - (float4)(0.01f,0,0,0)) - 
-										sampleVolume(edgePosition[ edgeIndex ] + (float4)(0.01f,0,0,0));
-			edgeNormal[ edgeIndex ].y = sampleVolume(edgePosition[ edgeIndex ] - (float4)(0,0.01f,0,0)) - 
-										sampleVolume(edgePosition[ edgeIndex ] + (float4)(0,0.01f,0,0));
-			edgeNormal[ edgeIndex ].z = sampleVolume(edgePosition[ edgeIndex ] - (float4)(0,0,0.01f,0)) - 
-										sampleVolume(edgePosition[ edgeIndex ] + (float4)(0,0,0.01f,0));
+			edgeNormal[edgeIndex].x = sampleVolume(edgePosition[edgeIndex] - (float4)(0.01f, 0, 0, 0), a_particleCount, a_particles) -
+				sampleVolume(edgePosition[edgeIndex] + (float4)(0.01f, 0, 0, 0), a_particleCount, a_particles);
+			edgeNormal[edgeIndex].y = sampleVolume(edgePosition[edgeIndex] - (float4)(0, 0.01f, 0, 0), a_particleCount, a_particles) -
+				sampleVolume(edgePosition[edgeIndex] + (float4)(0, 0.01f, 0, 0), a_particleCount, a_particles);
+			edgeNormal[edgeIndex].z = sampleVolume(edgePosition[edgeIndex] - (float4)(0, 0, 0.01f, 0), a_particleCount, a_particles) -
+				sampleVolume(edgePosition[edgeIndex] + (float4)(0, 0, 0.01f, 0), a_particleCount, a_particles);
 			edgeNormal[edgeIndex].w = 0;
 
 			if ( dot(edgeNormal[ edgeIndex ],edgeNormal[ edgeIndex ]) > 0 )

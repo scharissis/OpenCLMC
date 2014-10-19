@@ -39,13 +39,16 @@ struct CLData
 
 	cl_mem				vboLink;
 	cl_mem				faceCountLink;
+	cl_mem				particleLink;
 };
 
 int main(int argc, char* argv[])
 {
-	MCData mcData = { { 256, 256, 256 }, 0.0015f, 250000, 0 };
+	MCData mcData = { { 256, 256, 256 }, 0.0035f, 250000, 0 };
 	GLData glData = { 0 };
 	CLData clData;
+	const int particleCount = 5;
+	glm::vec4 particles[particleCount];
 
 	//////////////////////////////////////////////////////////////////////////
 	// Window creation and OpenGL initialisaion
@@ -225,31 +228,46 @@ int main(int argc, char* argv[])
 	CL_CHECK(result);
 	clData.faceCountLink = clCreateBuffer(clData.context, CL_MEM_READ_WRITE, sizeof(unsigned int), &mcData.faceCount, &result);
 	CL_CHECK(result);
+	clData.particleLink = clCreateBuffer(clData.context, CL_MEM_READ_ONLY, sizeof(glm::vec4) * 5, particles, &result);
+	CL_CHECK(result);
 
 	// loop
 	while (!glfwWindowShouldClose(window) && 
 		   !glfwGetKey(window, GLFW_KEY_ESCAPE)) 
 	{
+		float time = (float)glfwGetTime();
+
+		// our sample volume is made of metaballs
+		particles[0] = glm::vec4(128, 128, 128, 0);
+		particles[1] = glm::vec4(sin(time) * 64, cos(time*0.5f)*64, sin(time * 2) * 32, 0) + particles[0];
+		particles[2] = glm::vec4(cos(-time*0.25f) * 16, cos(time*0.5f), cos(time) * 64, 0) + particles[0];
+		particles[3] = glm::vec4(sin(time) * 64, cos(time*0.5f)*64, cos(-time * 2)* 32, 0) + particles[0];
+		particles[4] = glm::vec4(sin(time) * 32, sin(time*1.5f)*32, sin(time * 2)*64, 0) + particles[0];
+
 		// ensure GL is complete
 		glFinish();
 
 		// reset CL and aquire mem objects
 		mcData.faceCount = 0;
-		cl_event writeEvents[2] = { 0, 0 };
+		cl_event writeEvents[3] = { 0, 0, 0 };
 
 		cl_int result = clEnqueueAcquireGLObjects(clData.queue, 1, &clData.vboLink, 0, 0, &writeEvents[0]);
 		CL_CHECK(result);
 		result = clEnqueueWriteBuffer(clData.queue, clData.faceCountLink, CL_FALSE, 0, sizeof(unsigned int), &mcData.faceCount, 0, nullptr, &writeEvents[1]);
 		CL_CHECK(result);
+		result = clEnqueueWriteBuffer(clData.queue, clData.particleLink, CL_FALSE, 0, sizeof(glm::vec4) * 5, particles, 0, nullptr, &writeEvents[2]);
+		CL_CHECK(result);
 
 		result = clSetKernelArg(clData.kernel, 0, sizeof(cl_mem), &clData.faceCountLink);
 		result |= clSetKernelArg(clData.kernel, 1, sizeof(cl_mem), &clData.vboLink);
 		result |= clSetKernelArg(clData.kernel, 2, sizeof(cl_float), &mcData.threshold);
+		result |= clSetKernelArg(clData.kernel, 3, sizeof(cl_int), &particleCount);
+		result |= clSetKernelArg(clData.kernel, 4, sizeof(cl_mem), &clData.particleLink);
 		CL_CHECK(result);
 
 		// march dem cubes!
 		cl_event processEvent = 0;
-		result = clEnqueueNDRangeKernel(clData.queue, clData.kernel, 3, 0, mcData.gridSize, 0, 2, writeEvents, &processEvent);
+		result = clEnqueueNDRangeKernel(clData.queue, clData.kernel, 3, 0, mcData.gridSize, 0, 3, writeEvents, &processEvent);
 		CL_CHECK(result);
 
 		result = clEnqueueReleaseGLObjects(clData.queue, 1, &clData.vboLink, 1, &processEvent, 0);
@@ -262,8 +280,6 @@ int main(int argc, char* argv[])
 
 		// draw
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-		float time = (float)glfwGetTime();
 
 		glm::vec3 target(mcData.gridSize[0] / 2, mcData.gridSize[1] / 2, mcData.gridSize[2] / 2);
 		glm::vec3 eye(sin(time) * 128, 0, cos(time) * 128);
