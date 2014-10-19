@@ -7,8 +7,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <GLFW/glfw3.h>
 #include <CL/opencl.h>
-
-#include <string>
+#include <stdio.h>
 
 void APIENTRY debugCallback(GLenum source, GLenum type, GLuint id,
 	GLenum severity, GLsizei length, const GLchar * msg, const void * param);
@@ -82,8 +81,8 @@ int main(int argc, char* argv[])
 	glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
 	
 	// shader
-	char* vsSource = STRINGIFY(#version 330\n layout(location = 0) in vec4 Position; layout(location = 1)in vec4 Normal; out vec4 N; uniform mat4 pvm; void main() { gl_Position = pvm * Position; N = Normal; });
-	char* fsSource = STRINGIFY(#version 330\n in vec4 N; out vec4 Colour; void main() { float d = dot(normalize(N.xyz), normalize(vec3(0, 1, 1))) * 0.8; Colour = vec4(mix(vec3(0.25),vec3(1),d),1); });
+	char* vsSource = STRINGIFY(#version 330\n layout(location = 0) in vec4 Position; layout(location = 1) in vec4 Normal; out vec4 N; uniform mat4 pvm; void main() { gl_Position = pvm * Position; N = Normal; });
+	char* fsSource = STRINGIFY(#version 330\n in vec4 N; out vec4 Colour; void main() { Colour = vec4(N.xyz,1); });
 
 	GLuint vs = glCreateShader(GL_VERTEX_SHADER);
 	GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
@@ -103,24 +102,77 @@ int main(int argc, char* argv[])
 	glDeleteShader(fs);
 
 	GLint pvmUniform = glGetUniformLocation(glData.program, "pvm");
+	GLint colourUniform = glGetUniformLocation(glData.program, "C");
 
 	// mesh data
-	glGenVertexArrays(1, &glData.vao);
-	glBindVertexArray(glData.vao);
-	glEnableVertexAttribArray(0);
-	glEnableVertexAttribArray(1);
-	
 	glGenBuffers(1, &glData.vbo);
 	glBindBuffer(GL_ARRAY_BUFFER, glData.vbo);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * 2 * mcData.maxFaces * 3, 0, GL_STATIC_DRAW);
-
-	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(glm::vec4) * 2, 0);
-	glVertexAttribPointer(1, 4, GL_FLOAT, GL_TRUE, sizeof(glm::vec4) * 2, ((char*)0) + 16);
-	glBindVertexArray(0);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
+	glGenVertexArrays(1, &glData.vao);
+	glBindVertexArray(glData.vao);
+
+	glEnableVertexAttribArray(0);
+	glBindVertexBuffer(0, glData.vbo, 0, sizeof(glm::vec4) * 2);
+	glVertexAttribFormat(0, 4, GL_FLOAT, GL_FALSE, 0);
+	glVertexAttribBinding(0, 0);
+
+	glEnableVertexAttribArray(1);
+	glBindVertexBuffer(1, glData.vbo, 0, sizeof(glm::vec4) * 2);
+	glVertexAttribFormat(1, 4, GL_FLOAT, GL_TRUE, sizeof(glm::vec4));
+	glVertexAttribBinding(1, 1);
+
+	glBindVertexArray(0);
+
+	// hand-coded crappy box around the fluid
+	glm::vec4 lines[] = {
+		glm::vec4(0, 0, 0, 1),															glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], 0, 0, 1),											glm::vec4(1),
+		glm::vec4(0, 0, mcData.gridSize[2], 1),											glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], 0, mcData.gridSize[2], 1),						glm::vec4(1),
+		glm::vec4(0, mcData.gridSize[1], 0, 1),											glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], mcData.gridSize[1], 0, 1),						glm::vec4(1),
+		glm::vec4(0, mcData.gridSize[1], mcData.gridSize[2], 1),						glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], mcData.gridSize[1], mcData.gridSize[2], 1),		glm::vec4(1),
+		glm::vec4(0, 0, 0, 1),															glm::vec4(1),
+		glm::vec4(0, mcData.gridSize[1], 0, 1),											glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], 0, 0, 1),											glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], mcData.gridSize[1], 0, 1),						glm::vec4(1),
+		glm::vec4(0, 0, mcData.gridSize[2], 1),											glm::vec4(1),
+		glm::vec4(0, mcData.gridSize[1], mcData.gridSize[2], 1),						glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], 0, mcData.gridSize[2], 1),						glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], mcData.gridSize[1], mcData.gridSize[2], 1),		glm::vec4(1),
+		glm::vec4(0, 0, 0, 1),															glm::vec4(1),
+		glm::vec4(0, 0, mcData.gridSize[2], 1),											glm::vec4(1),
+		glm::vec4(0, mcData.gridSize[1], 0, 1),											glm::vec4(1),
+		glm::vec4(0, mcData.gridSize[1], mcData.gridSize[2], 1),						glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], 0, 0, 1),											glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], 0, mcData.gridSize[2], 1),						glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], mcData.gridSize[1], 0, 1),						glm::vec4(1),
+		glm::vec4(mcData.gridSize[0], mcData.gridSize[1], mcData.gridSize[2], 1),		glm::vec4(1)
+	};
+
+	GLuint boxVBO, boxVAO;
+	glGenBuffers(1, &boxVBO);
+	glBindBuffer(GL_ARRAY_BUFFER, boxVBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * 48, lines, GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	glGenVertexArrays(1, &boxVAO);
+	glBindVertexArray(boxVAO);
+	glEnableVertexAttribArray(0);
+	glBindVertexBuffer(0, boxVBO, 0, sizeof(glm::vec4) * 2);
+	glVertexAttribFormat(0, 4, GL_FLOAT, GL_FALSE, 0);
+	glVertexAttribBinding(0, 0);
+	glEnableVertexAttribArray(1);
+	glBindVertexBuffer(1, boxVBO, 0, sizeof(glm::vec4) * 2);
+	glVertexAttribFormat(1, 4, GL_FLOAT, GL_TRUE, sizeof(glm::vec4));
+	glVertexAttribBinding(1, 1);
+	glBindVertexArray(0);
+	
 	//////////////////////////////////////////////////////////////////////////
-	// OpenCL stup
+	// OpenCL setup
 	cl_platform_id platform;
 	cl_int result = clGetPlatformIDs(1, &platform, 0);
 	CL_CHECK(result);
@@ -195,6 +247,7 @@ int main(int argc, char* argv[])
 		result |= clSetKernelArg(clData.kernel, 2, sizeof(cl_float), &mcData.threshold);
 		CL_CHECK(result);
 
+		// march dem cubes!
 		cl_event processEvent = 0;
 		result = clEnqueueNDRangeKernel(clData.queue, clData.kernel, 3, 0, mcData.gridSize, 0, 2, writeEvents, &processEvent);
 		CL_CHECK(result);
@@ -207,19 +260,24 @@ int main(int argc, char* argv[])
 
 		clFinish(clData.queue);
 
-		// draw blob
+		// draw
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		float time = (float)glfwGetTime();
 
-		glm::vec3 target(128, 128, 128);
-		glm::vec3 eye(sin(time) * 32, 25, cos(time) * 32);
+		glm::vec3 target(mcData.gridSize[0] / 2, mcData.gridSize[1] / 2, mcData.gridSize[2] / 2);
+		glm::vec3 eye(sin(time) * 128, 0, cos(time) * 128);
 		glm::mat4 pvm = glm::perspective(glm::radians(90.0f), 16 / 9.f, 0.1f, 2000.f) * glm::lookAt(target + eye, target, glm::vec3(0, 1, 0));
 
 		glUniformMatrix4fv(pvmUniform, 1, GL_FALSE, glm::value_ptr(pvm));
 
+		// draw blob
 		glBindVertexArray(glData.vao);
 		glDrawArrays(GL_TRIANGLES, 0, glm::min(mcData.faceCount, mcData.maxFaces) * 3);
+		
+		// white box around grid
+		glBindVertexArray(boxVAO);
+		glDrawArrays(GL_LINES, 0, 48);
 		
 		// present
 		glfwSwapBuffers(window);
@@ -247,84 +305,45 @@ int main(int argc, char* argv[])
 void APIENTRY debugCallback(GLenum source, GLenum type, GLuint id, 
 							GLenum severity, GLsizei length, const GLchar * msg, const void * param)
 {
+	char src[16], t[20];
+	if (source == GL_DEBUG_SOURCE_API)
+		strcpy(src, "OpenGL");
+	else if (source == GL_DEBUG_SOURCE_WINDOW_SYSTEM)
+		strcpy(src, "Windows");
+	else if (source == GL_DEBUG_SOURCE_SHADER_COMPILER)
+		strcpy(src, "Shader Compiler");
+	else if (source == GL_DEBUG_SOURCE_THIRD_PARTY)
+		strcpy(src, "Third Party");
+	else if (source == GL_DEBUG_SOURCE_APPLICATION)
+		strcpy(src, "Application");
+	else if (source == GL_DEBUG_SOURCE_OTHER)
+		strcpy(src, "Other");
 
-	std::string sourceStr;
-	switch (source) 
-	{
-	case GL_DEBUG_SOURCE_WINDOW_SYSTEM:
-		sourceStr = "WindowSys";
-		break;
-	case GL_DEBUG_SOURCE_APPLICATION:
-		sourceStr = "App";
-		break;
-	case GL_DEBUG_SOURCE_API:
-		sourceStr = "OpenGL";
-		break;
-	case GL_DEBUG_SOURCE_SHADER_COMPILER:
-		sourceStr = "ShaderCompiler";
-		break;
-	case GL_DEBUG_SOURCE_THIRD_PARTY:
-		sourceStr = "3rdParty";
-		break;
-	case GL_DEBUG_SOURCE_OTHER:
-		sourceStr = "Other";
-		break;
-	default:
-		sourceStr = "Unknown";
-	}
+	if (type == GL_DEBUG_TYPE_ERROR)
+		strcpy(t, "Error");
+	else if (type == GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR)
+		strcpy(t, "Deprecated Behavior");
+	else if (type == GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR)
+		strcpy(t, "Undefined Behavior");
+	else if (type == GL_DEBUG_TYPE_PORTABILITY)
+		strcpy(t, "Portability");
+	else if (type == GL_DEBUG_TYPE_PERFORMANCE)
+		strcpy(t, "Performance");
+	else if (type == GL_DEBUG_TYPE_MARKER)
+		strcpy(t, "Marker");
+	else if (type == GL_DEBUG_TYPE_PUSH_GROUP)
+		strcpy(t, "Push Group");
+	else if (type == GL_DEBUG_TYPE_POP_GROUP)
+		strcpy(t, "Pop Group");
+	else if (type == GL_DEBUG_TYPE_OTHER)
+		strcpy(t, "Other");
 
-	std::string typeStr;
-	switch (type) 
-	{
-	case GL_DEBUG_TYPE_ERROR:
-		typeStr = "Error";
-		break;
-	case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR:
-		typeStr = "Deprecated";
-		break;
-	case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR:
-		typeStr = "Undefined";
-		break;
-	case GL_DEBUG_TYPE_PORTABILITY:
-		typeStr = "Portability";
-		break;
-	case GL_DEBUG_TYPE_PERFORMANCE:
-		typeStr = "Performance";
-		break;
-	case GL_DEBUG_TYPE_MARKER:
-		typeStr = "Marker";
-		break;
-	case GL_DEBUG_TYPE_PUSH_GROUP:
-		typeStr = "PushGrp";
-		break;
-	case GL_DEBUG_TYPE_POP_GROUP:
-		typeStr = "PopGrp";
-		break;
-	case GL_DEBUG_TYPE_OTHER:
-		typeStr = "Other";
-		break;
-	default:
-		typeStr = "Unknown";
-	}
-
-	std::string sevStr;
-	switch (severity)
-	{
-	case GL_DEBUG_SEVERITY_HIGH:
-		sevStr = "HIGH";
-		break;
-	case GL_DEBUG_SEVERITY_MEDIUM:
-		sevStr = "MED";
-		break;
-	case GL_DEBUG_SEVERITY_LOW:
-		sevStr = "LOW";
-		break;
-	case GL_DEBUG_SEVERITY_NOTIFICATION:
-		sevStr = "NOTIFY";
-		break;
-	default:
-		sevStr = "UNK";
-	}
-
-	printf("%s: %s [%s] (%d):\n\t%s\n", typeStr.c_str(), sourceStr.c_str(), sevStr.c_str(), id, msg);
+	if (severity == GL_DEBUG_SEVERITY_HIGH)
+		printf("GL Error: %d\n\tType: %s\n\tSource: %s\n\tMessage: %s\n", id, t, src, msg);
+	else if (severity == GL_DEBUG_SEVERITY_MEDIUM)
+		printf("GL Warning: %d\n\tType: %s\n\tSource: %s\n\tMessage: %s\n", id, t, src, msg);
+	else if (severity == GL_DEBUG_SEVERITY_LOW)
+		printf("GL: %d\n\tType: %s\n\tSource: %s\n\tMessage: %s\n", id, t, src, msg);
+	else if (severity == GL_DEBUG_SEVERITY_NOTIFICATION)
+		printf("GL Message: %d\n\tType: %s\n\tSource: %s\n\tMessage: %s\n", id, t, src, msg);
 }

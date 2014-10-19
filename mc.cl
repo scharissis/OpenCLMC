@@ -1,9 +1,9 @@
 // marching cubes using atomic indexing
 
-constant float3 CUBE_CORNERS[8] =
+constant float4 CUBE_CORNERS[8] =
 {
-	{0.0f, 0.0f, 0.0f},{1.0f, 0.0f, 0.0f},{1.0f, 1.0f, 0.0f},{0.0f, 1.0f, 0.0f},
-	{0.0f, 0.0f, 1.0f},{1.0f, 0.0f, 1.0f},{1.0f, 1.0f, 1.0f},{0.0f, 1.0f, 1.0f}
+	{ 0.0f, 0.0f, 0.0f, 1.0f }, { 1.0f, 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 0.0f, 1.0f }, { 0.0f, 1.0f, 0.0f, 1.0f },
+	{ 0.0f, 0.0f, 1.0f, 1.0f }, { 1.0f, 0.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f, 1.0f }, { 0.0f, 1.0f, 1.0f, 1.0f }
 };
 
 constant int EDGE_INDICES[12][2] = 
@@ -13,11 +13,11 @@ constant int EDGE_INDICES[12][2] =
 	{0,4}, {1,5}, {2,6}, {3,7}
 };
 
-constant float3 EDGE_DIRECTIONS[12] =
+constant float4 EDGE_DIRECTIONS[12] =
 {
-	{1.0f, 0.0f, 0.0f},{0.0f, 1.0f, 0.0f},{-1.0f, 0.0f, 0.0f},{0.0f, -1.0f, 0.0f},
-	{1.0f, 0.0f, 0.0f},{0.0f, 1.0f, 0.0f},{-1.0f, 0.0f, 0.0f},{0.0f, -1.0f, 0.0f},
-	{0.0f, 0.0f, 1.0f},{0.0f, 0.0f, 1.0f},{ 0.0f, 0.0f, 1.0f},{0.0f,  0.0f, 1.0f}
+	{ 1.0f, 0.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f, 0.0f }, { -1.0f, 0.0f, 0.0f, 0.0f }, { 0.0f, -1.0f, 0.0f, 0.0f },
+	{ 1.0f, 0.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f, 0.0f }, { -1.0f, 0.0f, 0.0f, 0.0f }, { 0.0f, -1.0f, 0.0f, 0.0f },
+	{ 0.0f, 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f, 0.0f }
 };
 
 constant int EDGE_FLAGS[256] =
@@ -301,10 +301,25 @@ constant int TRIANGLE_TABLE[256][16] =
 };
 
 // example volume, could be changed in the future to sample voxels
-float sampleVolume(float3 v)
+float sampleVolume(float4 v)
 {
-	float3 vp = v - (float3)(128,128,128);
-	return 1.0 / dot(vp, vp);	
+	float4 vp = v - (float4)(128,128,128,0);
+	float d = 1.0 / dot(vp.xyz, vp.xyz);
+
+	vp = v - (float4)(128, 128 + 64, 128, 0);
+	d += 1.0 / dot(vp.xyz, vp.xyz);
+
+	vp = v - (float4)(128, 128 - 64, 128, 0);
+	d += 1.0 / dot(vp.xyz, vp.xyz);
+
+	vp = v - (float4)(128 - 64, 128 - 64, 128 - 16, 0);
+	d += 1.0 / dot(vp.xyz, vp.xyz);
+
+	vp = v - (float4)(128 - 16, 128 - 64, 128 - 64, 0);
+	d += 1.0 / dot(vp.xyz, vp.xyz);
+
+	// give them the d!
+	return d;
 }
 
 kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into vertices
@@ -312,7 +327,7 @@ kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into v
 					 float a_threshold)
 {
 	// lower corner
-	float3 cubeCorner = (float3)(get_global_id(0), get_global_id(1), get_global_id(2));
+	float4 cubeCorner = (float4)(get_global_id(0), get_global_id(1), get_global_id(2), 0.0f);
 
 	// store a local copy of the cube's corner volumes
 	float cornerVolumes[8];	
@@ -337,8 +352,8 @@ kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into v
 	if (cornerVolumes[ 7 ] <= a_threshold)	flagIndex |= (1 << 7);
 
 	float offset, delta;
-	float3 edgePosition[12];
-	float3 edgeNormal[12];
+	float4 edgePosition[12];
+	float4 edgeNormal[12];
 
 	// find the intersection point between an edge
 	for ( int edgeIndex = 0 ; edgeIndex < 12 ; ++edgeIndex )
@@ -353,14 +368,15 @@ kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into v
 				offset = (a_threshold - cornerVolumes[ EDGE_INDICES[ edgeIndex ][0] ]) / delta;
 
 			edgePosition[ edgeIndex ] = cubeCorner + (CUBE_CORNERS[ EDGE_INDICES[ edgeIndex ][0] ] + EDGE_DIRECTIONS[ edgeIndex ] * offset);
-			
+
 			// calculate normal
-			edgeNormal[ edgeIndex ].x = sampleVolume(edgePosition[ edgeIndex ] - (float3)(0.01f,0,0)) - 
-										sampleVolume(edgePosition[ edgeIndex ] + (float3)(0.01f,0,0));
-			edgeNormal[ edgeIndex ].y = sampleVolume(edgePosition[ edgeIndex ] - (float3)(0,0.01f,0)) - 
-										sampleVolume(edgePosition[ edgeIndex ] + (float3)(0,0.01f,0));
-			edgeNormal[ edgeIndex ].z = sampleVolume(edgePosition[ edgeIndex ] - (float3)(0,0,0.01f)) - 
-										sampleVolume(edgePosition[ edgeIndex ] + (float3)(0,0,0.01f));
+			edgeNormal[ edgeIndex ].x = sampleVolume(edgePosition[ edgeIndex ] - (float4)(0.01f,0,0,0)) - 
+										sampleVolume(edgePosition[ edgeIndex ] + (float4)(0.01f,0,0,0));
+			edgeNormal[ edgeIndex ].y = sampleVolume(edgePosition[ edgeIndex ] - (float4)(0,0.01f,0,0)) - 
+										sampleVolume(edgePosition[ edgeIndex ] + (float4)(0,0.01f,0,0));
+			edgeNormal[ edgeIndex ].z = sampleVolume(edgePosition[ edgeIndex ] - (float4)(0,0,0.01f,0)) - 
+										sampleVolume(edgePosition[ edgeIndex ] + (float4)(0,0,0.01f,0));
+			edgeNormal[edgeIndex].w = 0;
 
 			if ( dot(edgeNormal[ edgeIndex ],edgeNormal[ edgeIndex ]) > 0 )
 				edgeNormal[ edgeIndex ] = normalize(edgeNormal[ edgeIndex ]);
@@ -381,8 +397,8 @@ kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into v
 		{
 			// write out 2 float4's for each vertex (position + normal)
 			int vertexIndex = TRIANGLE_TABLE[ flagIndex ][3 * triangleIndex + triangleVertex];
-			a_vertices[startVertex * 6 + triangleVertex * 2] = (float4)(edgePosition[ vertexIndex ], 1.0f);
-			a_vertices[startVertex * 6 + triangleVertex * 2 + 1] = (float4)(edgeNormal[ vertexIndex ], 0.0f);
+			a_vertices[startVertex * 6 + triangleVertex * 2] = edgePosition[ vertexIndex ];
+			a_vertices[startVertex * 6 + triangleVertex * 2 + 1] = edgeNormal[ vertexIndex ];
 		}
 	}	
 }
