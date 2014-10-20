@@ -44,10 +44,10 @@ struct CLData
 
 int main(int argc, char* argv[])
 {
-	MCData mcData = { { 256, 256, 256 }, 0.0035f, 250000, 0 };
+	MCData mcData = { { 128, 128, 128 }, 0.01f, 250000, 0 };
 	GLData glData = { 0 };
 	CLData clData;
-	const int particleCount = 5;
+	const int particleCount = 8;
 	glm::vec4 particles[particleCount];
 
 	//////////////////////////////////////////////////////////////////////////
@@ -85,7 +85,7 @@ int main(int argc, char* argv[])
 	
 	// shader
 	char* vsSource = STRINGIFY(#version 330\n layout(location = 0) in vec4 Position; layout(location = 1) in vec4 Normal; out vec4 N; uniform mat4 pvm; void main() { gl_Position = pvm * Position; N = Normal; });
-	char* fsSource = STRINGIFY(#version 330\n in vec4 N; out vec4 Colour; void main() { Colour = vec4(N.xyz,1); });
+	char* fsSource = STRINGIFY(#version 330\n in vec4 N; out vec4 Colour; void main() { float d = dot(normalize(N.xyz), normalize(vec3(1))); Colour = vec4(mix(vec3(0,0,0.5),vec3(0,0.5,1),d), 1); });
 
 	GLuint vs = glCreateShader(GL_VERTEX_SHADER);
 	GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
@@ -215,9 +215,14 @@ int main(int argc, char* argv[])
 		clGetProgramBuildInfo(clData.program, device, CL_PROGRAM_BUILD_LOG, 0, 0, &len);
 		char* log = new char[len];
 		clGetProgramBuildInfo(clData.program, device, CL_PROGRAM_BUILD_LOG, len, log, 0);
-		OutputDebugStringA("Kernel error:\n");
-		OutputDebugStringA(log);
-		OutputDebugStringA("\n");
+		printf("Kernel error:\n%s\n", log);
+		delete[] log;
+
+		clReleaseProgram(clData.program);
+		clReleaseCommandQueue(clData.queue);
+		clReleaseContext(clData.context);
+
+		exit(EXIT_FAILURE);
 	}
 	CL_CHECK(result);
 	clData.kernel = clCreateKernel(clData.program, "kernelMC", &result);
@@ -228,7 +233,7 @@ int main(int argc, char* argv[])
 	CL_CHECK(result);
 	clData.faceCountLink = clCreateBuffer(clData.context, CL_MEM_READ_WRITE, sizeof(unsigned int), &mcData.faceCount, &result);
 	CL_CHECK(result);
-	clData.particleLink = clCreateBuffer(clData.context, CL_MEM_READ_ONLY, sizeof(glm::vec4) * 5, particles, &result);
+	clData.particleLink = clCreateBuffer(clData.context, CL_MEM_READ_ONLY, sizeof(glm::vec4) * particleCount, particles, &result);
 	CL_CHECK(result);
 
 	// loop
@@ -237,17 +242,20 @@ int main(int argc, char* argv[])
 	{
 		float time = (float)glfwGetTime();
 
-		// our sample volume is made of metaballs
-		particles[0] = glm::vec4(128, 128, 128, 0);
-		particles[1] = glm::vec4(sin(time) * 64, cos(time*0.5f)*64, sin(time * 2) * 32, 0) + particles[0];
-		particles[2] = glm::vec4(cos(-time*0.25f) * 16, cos(time*0.5f), cos(time) * 64, 0) + particles[0];
-		particles[3] = glm::vec4(sin(time) * 64, cos(time*0.5f)*64, cos(-time * 2)* 32, 0) + particles[0];
-		particles[4] = glm::vec4(sin(time) * 32, sin(time*1.5f)*32, sin(time * 2)*64, 0) + particles[0];
+		// our sample volume is made of meta balls
+		particles[0] = glm::vec4(64, 64, 64, 0);
+		particles[1] = glm::vec4(sin(time) * 32, cos(time * 0.5f) * 32, sin(time * 2) * 16, 0) + particles[0];
+		particles[2] = glm::vec4(cos(-time * 0.25f) * 8, cos(time * 0.5f), cos(time) * 32, 0) + particles[0];
+		particles[3] = glm::vec4(sin(time) * 32, cos(time * 0.5f) * 32, cos(-time * 2) * 16, 0) + particles[0];
+		particles[4] = glm::vec4(sin(time) * 16, sin(time * 1.5f) * 16, sin(time * 2) * 32, 0) + particles[0];
+		particles[5] = glm::vec4(cos(time * 0.3f) * 32, cos(time * 1.5f) * 32, sin(time * 2) * 32, 0) + particles[0];
+		particles[6] = glm::vec4(sin(time) * 16, sin(time * 1.5f) * 16, sin(time * 2) * 32, 0) + particles[0];
+		particles[7] = glm::vec4(sin(-time) * 32, sin(time * 1.5f) * 32, cos(time * 4) * 32, 0) + particles[0];
 
 		// ensure GL is complete
 		glFinish();
 
-		// reset CL and aquire mem objects
+		// reset CL and acquire mem objects
 		mcData.faceCount = 0;
 		cl_event writeEvents[3] = { 0, 0, 0 };
 
@@ -255,7 +263,7 @@ int main(int argc, char* argv[])
 		CL_CHECK(result);
 		result = clEnqueueWriteBuffer(clData.queue, clData.faceCountLink, CL_FALSE, 0, sizeof(unsigned int), &mcData.faceCount, 0, nullptr, &writeEvents[1]);
 		CL_CHECK(result);
-		result = clEnqueueWriteBuffer(clData.queue, clData.particleLink, CL_FALSE, 0, sizeof(glm::vec4) * 5, particles, 0, nullptr, &writeEvents[2]);
+		result = clEnqueueWriteBuffer(clData.queue, clData.particleLink, CL_FALSE, 0, sizeof(glm::vec4) * particleCount, particles, 0, nullptr, &writeEvents[2]);
 		CL_CHECK(result);
 
 		result = clSetKernelArg(clData.kernel, 0, sizeof(cl_mem), &clData.faceCountLink);
@@ -270,19 +278,23 @@ int main(int argc, char* argv[])
 		result = clEnqueueNDRangeKernel(clData.queue, clData.kernel, 3, 0, mcData.gridSize, 0, 3, writeEvents, &processEvent);
 		CL_CHECK(result);
 
+		// give GL the vertex data back
 		result = clEnqueueReleaseGLObjects(clData.queue, 1, &clData.vboLink, 1, &processEvent, 0);
 		CL_CHECK(result);
 
+		// read how many triangles to draw
 		result = clEnqueueReadBuffer(clData.queue, clData.faceCountLink, CL_FALSE, 0, sizeof(unsigned int), &mcData.faceCount, 1, &processEvent, 0);
 		CL_CHECK(result);
 
+		// wait until cl has finished before we draw
 		clFinish(clData.queue);
 
 		// draw
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+		// target center of grid and spin the camera
 		glm::vec3 target(mcData.gridSize[0] / 2, mcData.gridSize[1] / 2, mcData.gridSize[2] / 2);
-		glm::vec3 eye(sin(time) * 128, 0, cos(time) * 128);
+		glm::vec3 eye(sin(time) * mcData.gridSize[0], 0, cos(time) * mcData.gridSize[0]);
 		glm::mat4 pvm = glm::perspective(glm::radians(90.0f), 16 / 9.f, 0.1f, 2000.f) * glm::lookAt(target + eye, target, glm::vec3(0, 1, 0));
 
 		glUniformMatrix4fv(pvmUniform, 1, GL_FALSE, glm::value_ptr(pvm));
