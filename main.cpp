@@ -85,7 +85,7 @@ int main(int argc, char* argv[])
 	
 	// shader
 	char* vsSource = STRINGIFY(#version 330\n layout(location = 0) in vec4 Position; layout(location = 1) in vec4 Normal; out vec4 N; uniform mat4 pvm; void main() { gl_Position = pvm * Position; N = Normal; });
-	char* fsSource = STRINGIFY(#version 330\n in vec4 N; out vec4 Colour; void main() { float d = dot(normalize(N.xyz), normalize(vec3(1))); Colour = vec4(mix(vec3(0,0,0.5),vec3(0,0.5,1),d), 1); });
+	char* fsSource = STRINGIFY(#version 330\n in vec4 N; out vec4 Colour; void main() { float d = dot(normalize(N.xyz), normalize(vec3(1))); Colour = vec4(mix(vec3(0,0,0.75),vec3(0,0.75,1),d), 1); });
 
 	GLuint vs = glCreateShader(GL_VERTEX_SHADER);
 	GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
@@ -266,11 +266,12 @@ int main(int argc, char* argv[])
 		result = clEnqueueWriteBuffer(clData.queue, clData.particleLink, CL_FALSE, 0, sizeof(glm::vec4) * particleCount, particles, 0, nullptr, &writeEvents[2]);
 		CL_CHECK(result);
 
-		result = clSetKernelArg(clData.kernel, 0, sizeof(cl_mem), &clData.faceCountLink);
-		result |= clSetKernelArg(clData.kernel, 1, sizeof(cl_mem), &clData.vboLink);
-		result |= clSetKernelArg(clData.kernel, 2, sizeof(cl_float), &mcData.threshold);
-		result |= clSetKernelArg(clData.kernel, 3, sizeof(cl_int), &particleCount);
-		result |= clSetKernelArg(clData.kernel, 4, sizeof(cl_mem), &clData.particleLink);
+		result = clSetKernelArg(clData.kernel, 0, sizeof(cl_int), &mcData.maxFaces);
+		result |= clSetKernelArg(clData.kernel, 1, sizeof(cl_mem), &clData.faceCountLink);
+		result |= clSetKernelArg(clData.kernel, 2, sizeof(cl_mem), &clData.vboLink);
+		result |= clSetKernelArg(clData.kernel, 3, sizeof(cl_float), &mcData.threshold);
+		result |= clSetKernelArg(clData.kernel, 4, sizeof(cl_int), &particleCount);
+		result |= clSetKernelArg(clData.kernel, 5, sizeof(cl_mem), &clData.particleLink);
 		CL_CHECK(result);
 
 		// march dem cubes!

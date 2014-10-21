@@ -316,7 +316,8 @@ float sampleVolume(float4 v,
 	return d;
 }
 
-kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into vertices
+kernel void kernelMC(int a_maxFaces,
+					 write_only global uint* a_faceCount, // atomic index into vertices
 					 write_only global float4* a_vertices,
 					 float a_threshold,
 					 int a_particleCount,
@@ -388,6 +389,9 @@ kernel void kernelMC(write_only global uint* a_faceCount, // atomic index into v
 
 		// using an atomic to index into the write_only array of vertices
 		uint startVertex = atomic_inc(a_faceCount);
+
+		if (startVertex >= a_maxFaces)
+			break;
 
 		for ( int triangleVertex = 0 ; triangleVertex < 3 ; ++triangleVertex )
 		{
