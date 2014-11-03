@@ -1,19 +1,21 @@
-
-#define _CRT_SECURE_NO_WARNINGS
-
 #include "gl_core_4_4.h"
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
+#include <glm/ext.hpp>
 #include <GLFW/glfw3.h>
-#include <CL/opencl.h>
-#include <stdio.h>
 
-void APIENTRY debugCallback(GLenum source, GLenum type, GLuint id,
-	GLenum severity, GLsizei length, const GLchar * msg, const void * param);
+#ifdef __APPLE__
+	#include <OpenCL/cl_gl_ext.h>
+	#include <OpenCL/cl.h>
+	#include <OpenGL/OpenGL.h>
+#else
+	#include <CL/cl.h>
+	#include <CL/cl_gl_ext.h>
+	#include <GL/GL.h>
+	#include <windows.h>
+#endif
 
-#define CL_CHECK(result) if (result != CL_SUCCESS) { printf("Error: %i\n", result); }
 #define STRINGIFY(str) #str
+#define CL_CHECK(result) if (result != CL_SUCCESS) { printf("Error: %i\n", result); }
 
 struct GLData
 {
@@ -27,7 +29,7 @@ struct MCData
 	size_t			gridSize[3];
 	cl_float		threshold;
 	unsigned int	maxFaces;
-	unsigned int	faceCount;
+	cl_uint	faceCount;
 };
 
 struct CLData
@@ -44,26 +46,26 @@ struct CLData
 
 int main(int argc, char* argv[])
 {
-	MCData mcData = { { 128, 128, 128 }, 0.01f, 250000, 0 };
+	MCData mcData = { { 64, 64, 64 }, 0.04f, 250000, 0 };
 	GLData glData = { 0 };
 	CLData clData;
 	const int particleCount = 8;
 	glm::vec4 particles[particleCount];
 
-	//////////////////////////////////////////////////////////////////////////
-	// Window creation and OpenGL initialisaion
+	// window creation and OpenGL initialisaion
 	if (!glfwInit())
 		exit(EXIT_FAILURE);
 	
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 4);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
 	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
-	GLFWwindow* window = glfwCreateWindow(1280, 720, "OpenCL Marching Cubes", nullptr, nullptr);
+	GLFWwindow* window = glfwCreateWindow(1280, 720, "Test", nullptr, nullptr);
 	if (window == nullptr)
 	{
+        
 		glfwTerminate();
 		exit(EXIT_FAILURE);
 	}
@@ -76,16 +78,26 @@ int main(int argc, char* argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	//////////////////////////////////////////////////////////////////////////
-	// OpenGL setup
 	glClearColor(0, 0, 0, 1);
 	glEnable(GL_DEPTH_TEST);
-	glDebugMessageCallback(debugCallback, nullptr);
-	glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
-	
+
 	// shader
-	char* vsSource = STRINGIFY(#version 330\n layout(location = 0) in vec4 Position; layout(location = 1) in vec4 Normal; out vec4 N; uniform mat4 pvm; void main() { gl_Position = pvm * Position; N = Normal; });
-	char* fsSource = STRINGIFY(#version 330\n in vec4 N; out vec4 Colour; void main() { float d = dot(normalize(N.xyz), normalize(vec3(1))); Colour = vec4(mix(vec3(0,0,0.75),vec3(0,0.75,1),d), 1); });
+	char* vsSource = STRINGIFY(#version 410\n 
+		layout(location = 0) in vec4 Position; 
+		layout(location = 1) in vec4 Normal; 
+		out vec4 N; 
+		uniform mat4 pvm; 
+		void main() { 
+			gl_Position = pvm * Position; 
+			N = Normal; 
+		});
+	char* fsSource = STRINGIFY(#version 410\n 
+		in vec4 N; 
+		out vec4 Colour;  	
+		void main() { 
+			float d = dot(normalize(N.xyz), normalize(vec3(1))); 
+			Colour = vec4(mix(vec3(0,0,0.75),vec3(0,0.75,1),d), 1); 
+		});
 
 	GLuint vs = glCreateShader(GL_VERTEX_SHADER);
 	GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
@@ -105,26 +117,20 @@ int main(int argc, char* argv[])
 	glDeleteShader(fs);
 
 	GLint pvmUniform = glGetUniformLocation(glData.program, "pvm");
-	GLint colourUniform = glGetUniformLocation(glData.program, "C");
 
 	// mesh data
 	glGenBuffers(1, &glData.vbo);
 	glBindBuffer(GL_ARRAY_BUFFER, glData.vbo);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * 2 * mcData.maxFaces * 3, 0, GL_STATIC_DRAW);
-	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
 	glGenVertexArrays(1, &glData.vao);
 	glBindVertexArray(glData.vao);
-
-	glEnableVertexAttribArray(0);
-	glBindVertexBuffer(0, glData.vbo, 0, sizeof(glm::vec4) * 2);
-	glVertexAttribFormat(0, 4, GL_FLOAT, GL_FALSE, 0);
-	glVertexAttribBinding(0, 0);
-
-	glEnableVertexAttribArray(1);
-	glBindVertexBuffer(1, glData.vbo, 0, sizeof(glm::vec4) * 2);
-	glVertexAttribFormat(1, 4, GL_FLOAT, GL_TRUE, sizeof(glm::vec4));
-	glVertexAttribBinding(1, 1);
+    
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(glm::vec4) * 2, 0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_TRUE, sizeof(glm::vec4) * 2, ((char*)0) + sizeof(glm::vec4));
+    glBindVertexArray(0);
 
 	glBindVertexArray(0);
 
@@ -160,61 +166,129 @@ int main(int argc, char* argv[])
 	glGenBuffers(1, &boxVBO);
 	glBindBuffer(GL_ARRAY_BUFFER, boxVBO);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * 48, lines, GL_STATIC_DRAW);
-	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
 	glGenVertexArrays(1, &boxVAO);
 	glBindVertexArray(boxVAO);
 	glEnableVertexAttribArray(0);
-	glBindVertexBuffer(0, boxVBO, 0, sizeof(glm::vec4) * 2);
-	glVertexAttribFormat(0, 4, GL_FLOAT, GL_FALSE, 0);
-	glVertexAttribBinding(0, 0);
-	glEnableVertexAttribArray(1);
-	glBindVertexBuffer(1, boxVBO, 0, sizeof(glm::vec4) * 2);
-	glVertexAttribFormat(1, 4, GL_FLOAT, GL_TRUE, sizeof(glm::vec4));
-	glVertexAttribBinding(1, 1);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(glm::vec4) * 2, 0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_TRUE, sizeof(glm::vec4) * 2, ((char*)0) + sizeof(glm::vec4));
 	glBindVertexArray(0);
-	
-	//////////////////////////////////////////////////////////////////////////
-	// OpenCL setup
-	cl_platform_id platform;
-	cl_int result = clGetPlatformIDs(1, &platform, 0);
-	CL_CHECK(result);
-	cl_device_id device;
-	result = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 1, &device, 0);
+    
+    // opencl setup
+    cl_uint numPlatforms = 0;
+    cl_int result = clGetPlatformIDs(0, nullptr, &numPlatforms);
+    printf("Platforms: %i\n", numPlatforms);
 	CL_CHECK(result);
 
-	// request GL/CL context
-	cl_context_properties contextProperties[] = {
-		CL_GL_CONTEXT_KHR, (cl_context_properties)wglGetCurrentContext(),
-		CL_WGL_HDC_KHR, (cl_context_properties)wglGetCurrentDC(),
-		CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
-		0, 0,
-	};
-	clData.context = clCreateContext(contextProperties, 1, &device, 0, 0, &result);
+	// I'm only going to care about the first platform
+	cl_platform_id platform;
+	result = clGetPlatformIDs(1, &platform, 0);
 	CL_CHECK(result);
-	clData.queue = clCreateCommandQueue(clData.context, device, 0, &result);
-	CL_CHECK(result);
+    
+    cl_uint numDevices = 0;
+	clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
+    printf("GPU Devices: %i\n", numDevices);
+    
+    cl_device_id* devices = new cl_device_id[numDevices];
+	result = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, numDevices, devices, 0);
+    CL_CHECK(result);
+    
+    // find a device that supports GL interop
+    cl_uint glDevice = 0;
+    bool glDeviceFound = false;
+    for (cl_uint i = 0 ; i < numDevices ; ++i)
+    {
+        size_t extensionSize = 0;
+        result = clGetDeviceInfo(devices[i], CL_DEVICE_EXTENSIONS, 0, nullptr, &extensionSize);
+        CL_CHECK(result);
+        
+        if (result == CL_SUCCESS)
+        {
+            char* extensions = new char[extensionSize];
+            result = clGetDeviceInfo(devices[i], CL_DEVICE_EXTENSIONS, extensionSize, extensions, &extensionSize);
+            CL_CHECK(result);
+
+            std::string devString(extensions);
+            delete[] extensions;
+            
+            size_t oldPos = 0;
+            size_t spacePos = devString.find(' ', oldPos);
+            while (spacePos != devString.npos)
+            {
+                if (strcmp("cl_khr_gl_sharing", devString.substr(oldPos, spacePos - oldPos).c_str()) == 0 ||
+                	strcmp("cl_APPLE_gl_sharing", devString.substr(oldPos, spacePos - oldPos).c_str()) == 0)
+                {
+                    glDevice = i;
+                    glDeviceFound = true;
+                    break;
+                }
+                do {
+                    oldPos = spacePos + 1;
+                    spacePos = devString.find(' ', oldPos);
+                } while (spacePos == oldPos);
+            }
+        }
+    }
+    
+    if (glDeviceFound == false)
+    {
+        printf("Failed to find CL-GL shared device!\n");
+        exit(EXIT_FAILURE);
+    }
+    printf("Found CL-GL shared device: id [ %i ]\n", glDevice);
+    
+#if defined(__APPLE__) || defined(MACOSX)
+    // Get current CGL Context and CGL Share group
+    CGLContextObj kCGLContext = CGLGetCurrentContext();
+    CGLShareGroupObj kCGLShareGroup = CGLGetShareGroup(kCGLContext);
+    
+    // Create CL context properties, add handle & share-group enum
+    cl_context_properties contextProperties[] = {
+        CL_CONTEXT_PROPERTY_USE_CGL_SHAREGROUP_APPLE,
+        (cl_context_properties)kCGLShareGroup, 0
+    };
+#else
+    // request GL/CL context
+    cl_context_properties contextProperties[] = {
+        CL_GL_CONTEXT_KHR, (cl_context_properties)wglGetCurrentContext(),
+        CL_WGL_HDC_KHR, (cl_context_properties)wglGetCurrentDC(),
+        CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
+        0, 0,
+    };
+#endif
+    
+    clData.context = clCreateContext(contextProperties, numDevices, devices, 0, 0, &result);
+    CL_CHECK(result);
+
+    clData.queue = clCreateCommandQueue(clData.context, devices[glDevice], 0, &result);
+    CL_CHECK(result);
 
 	// load kernel code
-	FILE* file = fopen("mc.cl", "rb");
+	FILE* file = fopen("./mc.cl", "rb");
+	if (file == nullptr)
+	{
+		printf("Failed to load kernel file mc.cl!\n");
+		exit(EXIT_FAILURE);
+	}
 	fseek(file, 0, SEEK_END);
-	unsigned int size = ftell(file);
+	size_t size = ftell(file);
 	fseek(file, 0, SEEK_SET);
 	char* kernelSource = new char[size];
 	fread(kernelSource, sizeof(char), size, file);
 	fclose(file);
 
 	// build program and extract kernel
-	clData.program = clCreateProgramWithSource(clData.context, 1, (const char**)&kernelSource, (const size_t*)&size, &result);
+	clData.program = clCreateProgramWithSource(clData.context, 1, (const char**)&kernelSource, &size, &result);
 	delete[] kernelSource;
 	CL_CHECK(result);
-	result = clBuildProgram(clData.program, 1, &device, 0, 0, 0);
+	result = clBuildProgram(clData.program, 1, &devices[glDevice], 0, 0, 0);
 	if (result != CL_SUCCESS)
 	{
 		size_t len = 0;
-		clGetProgramBuildInfo(clData.program, device, CL_PROGRAM_BUILD_LOG, 0, 0, &len);
+		clGetProgramBuildInfo(clData.program, devices[glDevice], CL_PROGRAM_BUILD_LOG, 0, 0, &len);
 		char* log = new char[len];
-		clGetProgramBuildInfo(clData.program, device, CL_PROGRAM_BUILD_LOG, len, log, 0);
+		clGetProgramBuildInfo(clData.program, devices[glDevice], CL_PROGRAM_BUILD_LOG, len, log, 0);
 		printf("Kernel error:\n%s\n", log);
 		delete[] log;
 
@@ -231,26 +305,27 @@ int main(int argc, char* argv[])
 	// cl mem objects
 	clData.vboLink = clCreateFromGLBuffer(clData.context, CL_MEM_WRITE_ONLY, glData.vbo, &result);
 	CL_CHECK(result);
-	clData.faceCountLink = clCreateBuffer(clData.context, CL_MEM_READ_WRITE, sizeof(unsigned int), &mcData.faceCount, &result);
+	clData.faceCountLink = clCreateBuffer(clData.context, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, sizeof(cl_uint), &mcData.faceCount, &result);
 	CL_CHECK(result);
-	clData.particleLink = clCreateBuffer(clData.context, CL_MEM_READ_ONLY, sizeof(glm::vec4) * particleCount, particles, &result);
+	clData.particleLink = clCreateBuffer(clData.context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, sizeof(glm::vec4) * particleCount, particles, &result);
 	CL_CHECK(result);
-
+	
 	// loop
 	while (!glfwWindowShouldClose(window) && 
 		   !glfwGetKey(window, GLFW_KEY_ESCAPE)) 
 	{
 		float time = (float)glfwGetTime();
 
-		// our sample volume is made of meta balls
-		particles[0] = glm::vec4(64, 64, 64, 0);
-		particles[1] = glm::vec4(sin(time) * 32, cos(time * 0.5f) * 32, sin(time * 2) * 16, 0) + particles[0];
-		particles[2] = glm::vec4(cos(-time * 0.25f) * 8, cos(time * 0.5f), cos(time) * 32, 0) + particles[0];
-		particles[3] = glm::vec4(sin(time) * 32, cos(time * 0.5f) * 32, cos(-time * 2) * 16, 0) + particles[0];
-		particles[4] = glm::vec4(sin(time) * 16, sin(time * 1.5f) * 16, sin(time * 2) * 32, 0) + particles[0];
-		particles[5] = glm::vec4(cos(time * 0.3f) * 32, cos(time * 1.5f) * 32, sin(time * 2) * 32, 0) + particles[0];
-		particles[6] = glm::vec4(sin(time) * 16, sin(time * 1.5f) * 16, sin(time * 2) * 32, 0) + particles[0];
-		particles[7] = glm::vec4(sin(-time) * 32, sin(time * 1.5f) * 32, cos(time * 4) * 32, 0) + particles[0];
+		// our sample volume is made of meta balls (they were placed based on a 128^3 grid)
+		float scale = mcData.gridSize[0] / (float)128;
+		particles[0] = glm::vec4(mcData.gridSize[0], mcData.gridSize[1], mcData.gridSize[2], 0)  * 0.5f;
+		particles[1] = glm::vec4(sin(time) * 32, cos(time * 0.5f) * 32, sin(time * 2) * 16, 0) * scale + particles[0];
+		particles[2] = glm::vec4(cos(-time * 0.25f) * 8, cos(time * 0.5f), cos(time) * 32, 0) * scale + particles[0];
+		particles[3] = glm::vec4(sin(time) * 32, cos(time * 0.5f) * 32, cos(-time * 2) * 16, 0) * scale + particles[0];
+		particles[4] = glm::vec4(sin(time) * 16, sin(time * 1.5f) * 16, sin(time * 2) * 32, 0) * scale + particles[0];
+		particles[5] = glm::vec4(cos(time * 0.3f) * 32, cos(time * 1.5f) * 32, sin(time * 2) * 32, 0) * scale + particles[0];
+		particles[6] = glm::vec4(sin(time) * 16, sin(time * 1.5f) * 16, sin(time * 2) * 32, 0) * scale + particles[0];
+		particles[7] = glm::vec4(sin(-time) * 32, sin(time * 1.5f) * 32, cos(time * 4) * 32, 0) * scale + particles[0];
 
 		// ensure GL is complete
 		glFinish();
@@ -307,7 +382,7 @@ int main(int argc, char* argv[])
 		// white box around grid
 		glBindVertexArray(boxVAO);
 		glDrawArrays(GL_LINES, 0, 48);
-		
+
 		// present
 		glfwSwapBuffers(window);
 		glfwPollEvents();
@@ -321,6 +396,7 @@ int main(int argc, char* argv[])
 	clReleaseProgram(clData.program);
 	clReleaseCommandQueue(clData.queue);
 	clReleaseContext(clData.context);
+	delete[] devices;
 
 	// cleanup gl
 	glDeleteBuffers(1, &glData.vbo);
@@ -329,50 +405,4 @@ int main(int argc, char* argv[])
 	glfwTerminate();
 
 	exit(EXIT_SUCCESS);
-}
-
-void APIENTRY debugCallback(GLenum source, GLenum type, GLuint id, 
-							GLenum severity, GLsizei length, const GLchar * msg, const void * param)
-{
-	char src[16], t[20];
-	if (source == GL_DEBUG_SOURCE_API)
-		strcpy(src, "OpenGL");
-	else if (source == GL_DEBUG_SOURCE_WINDOW_SYSTEM)
-		strcpy(src, "Windows");
-	else if (source == GL_DEBUG_SOURCE_SHADER_COMPILER)
-		strcpy(src, "Shader Compiler");
-	else if (source == GL_DEBUG_SOURCE_THIRD_PARTY)
-		strcpy(src, "Third Party");
-	else if (source == GL_DEBUG_SOURCE_APPLICATION)
-		strcpy(src, "Application");
-	else if (source == GL_DEBUG_SOURCE_OTHER)
-		strcpy(src, "Other");
-
-	if (type == GL_DEBUG_TYPE_ERROR)
-		strcpy(t, "Error");
-	else if (type == GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR)
-		strcpy(t, "Deprecated Behavior");
-	else if (type == GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR)
-		strcpy(t, "Undefined Behavior");
-	else if (type == GL_DEBUG_TYPE_PORTABILITY)
-		strcpy(t, "Portability");
-	else if (type == GL_DEBUG_TYPE_PERFORMANCE)
-		strcpy(t, "Performance");
-	else if (type == GL_DEBUG_TYPE_MARKER)
-		strcpy(t, "Marker");
-	else if (type == GL_DEBUG_TYPE_PUSH_GROUP)
-		strcpy(t, "Push Group");
-	else if (type == GL_DEBUG_TYPE_POP_GROUP)
-		strcpy(t, "Pop Group");
-	else if (type == GL_DEBUG_TYPE_OTHER)
-		strcpy(t, "Other");
-
-	if (severity == GL_DEBUG_SEVERITY_HIGH)
-		printf("GL Error: %d\n\tType: %s\n\tSource: %s\n\tMessage: %s\n", id, t, src, msg);
-	else if (severity == GL_DEBUG_SEVERITY_MEDIUM)
-		printf("GL Warning: %d\n\tType: %s\n\tSource: %s\n\tMessage: %s\n", id, t, src, msg);
-	else if (severity == GL_DEBUG_SEVERITY_LOW)
-		printf("GL: %d\n\tType: %s\n\tSource: %s\n\tMessage: %s\n", id, t, src, msg);
-	else if (severity == GL_DEBUG_SEVERITY_NOTIFICATION)
-		printf("GL Message: %d\n\tType: %s\n\tSource: %s\n\tMessage: %s\n", id, t, src, msg);
 }
